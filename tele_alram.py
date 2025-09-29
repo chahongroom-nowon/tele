@@ -2,7 +2,7 @@ import imaplib
 import email
 from email.header import decode_header
 import time
-import telegram
+from telegram import Bot
 import asyncio
 from dotenv import load_dotenv
 import os
@@ -63,7 +63,7 @@ for idx, staff in enumerate(staffs, 1):
 print("================\n")
 
 # 텔레그램 봇 초기화
-bot = telegram.Bot(token=TELEGRAM_TOKEN)
+bot = Bot(token=TELEGRAM_TOKEN)
 
 # 예약 메뉴 대체 딕셔너리
 menu_translation = {
@@ -232,7 +232,7 @@ async def check_mail():
                                                             continue  # 상태가 일치하지 않으면 이 직원은 스킵
 
                                                         # 모든 조건이 맞다면 메시지 전송
-                                                        bot.send_message(chat_id=staff["chat_id"], text=message)
+                                                        await bot.send_message(chat_id=staff["chat_id"], text=message)
                                                         print(f"메시지 전송 완료: {message} (수신자: {staff['team']})")
                                                 break  # 본문 파트 하나만 처리하고 break로 탈출
                                             except Exception as e:
