@@ -9,6 +9,7 @@ import os
 from lxml import html
 import re
 from datetime import datetime, timedelta
+import traceback
 
 # .env 파일에서 환경 변수 불러오기
 load_dotenv()
@@ -195,6 +196,96 @@ async def check_mail():
                                                 # 메뉴 대체 (C, P, CL 등으로)
                                                 reservation_menu = [menu_translation.get(menu, menu) for menu in reservation_menu]
 
+                                                # 요청사항 추출 (HTML 테이블 구조에서 추출)
+                                                request_note = None
+                                                try:
+                                                    # 방법 1: XPath로 "요청사항" 다음 형제 td 찾기
+                                                    request_tds = tree.xpath("//td[normalize-space(text())='요청사항']")
+                                                    if request_tds:
+                                                        for request_td in request_tds:
+                                                            # 같은 tr 내의 다음 형제 td 찾기
+                                                            next_td = request_td.xpath("./following-sibling::td[1]")
+                                                            if next_td:
+                                                                request_note = next_td[0].text_content().strip()
+                                                                print(f"요청사항 추출 성공 (XPath): {request_note[:50]}...")  # 디버깅
+                                                                break
+                                                    
+                                                    # 요청사항 추출 후 불필요한 텍스트 제거
+                                                    if request_note:
+                                                        # 불필요한 텍스트 패턴들 (이것들이 나타나기 전까지 자르기)
+                                                        unwanted_patterns = [
+                                                            '자세히 보기',
+                                                            '스마트플레이스',
+                                                            '본 메일은 발신전용입니다',
+                                                            '이용약관',
+                                                            '운영정책',
+                                                            '개인정보처리방침',
+                                                            '고객센터',
+                                                            'Copyright',
+                                                            'NAVER Corp'
+                                                        ]
+                                                        for pattern in unwanted_patterns:
+                                                            if pattern in request_note:
+                                                                request_note = request_note.split(pattern)[0].strip()
+                                                                break
+                                                        # 연속된 공백이나 줄바꿈 정리
+                                                        request_note = re.sub(r'\s+', ' ', request_note).strip()
+                                                    
+                                                    # 방법 2: XPath가 실패하면 정규표현식으로 텍스트에서 찾기
+                                                    if not request_note:
+                                                        # 전체 텍스트에서 "요청사항" 다음 내용 찾기
+                                                        full_text = text_content
+                                                        # "요청사항" 다음에 오는 텍스트 패턴 찾기 (더 유연한 패턴)
+                                                        # 요청사항 다음에 공백/줄바꿈을 제외한 텍스트 찾기
+                                                        match = re.search(r'요청사항\s*[:\s]*\s+([^\n\r]+(?:\s+[^\n\r]+)*)', full_text, re.MULTILINE | re.DOTALL)
+                                                        if not match:
+                                                            # 더 단순한 패턴 시도
+                                                            match = re.search(r'요청사항\s+([^\n\r]+)', full_text)
+                                                        if match:
+                                                            request_note = match.group(1).strip()
+                                                            # 다음 주요 섹션 전까지 자르기
+                                                            next_sections = ['예약번호', '결제상태', '이용일시', '선택메뉴', '예약상품', '결제수단']
+                                                            for section in next_sections:
+                                                                if section in request_note:
+                                                                    request_note = request_note.split(section)[0].strip()
+                                                                    break
+                                                            # 불필요한 텍스트 패턴들 제거
+                                                            unwanted_patterns = [
+                                                                '자세히 보기',
+                                                                '스마트플레이스',
+                                                                '본 메일은 발신전용입니다',
+                                                                '이용약관',
+                                                                '운영정책',
+                                                                '개인정보처리방침',
+                                                                '고객센터',
+                                                                'Copyright',
+                                                                'NAVER Corp'
+                                                            ]
+                                                            for pattern in unwanted_patterns:
+                                                                if pattern in request_note:
+                                                                    request_note = request_note.split(pattern)[0].strip()
+                                                                    break
+                                                            # 연속된 공백이나 줄바꿈 정리
+                                                            request_note = re.sub(r'\s+', ' ', request_note).strip()
+                                                            # 너무 긴 경우 잘라내기
+                                                            if len(request_note) > 500:
+                                                                request_note = request_note[:500].strip()
+                                                            print(f"요청사항 추출 성공 (정규표현식): {request_note[:50]}...")  # 디버깅
+                                                    
+                                                    if not request_note:
+                                                        print("요청사항을 찾을 수 없습니다.")  # 디버깅
+                                                        # 디버깅: "요청사항" 텍스트가 있는지 확인
+                                                        if "요청사항" in text_content:
+                                                            print("'요청사항' 텍스트는 발견되었지만 추출 실패")
+                                                            # 요청사항 주변 텍스트 출력 (디버깅용)
+                                                            idx = text_content.find("요청사항")
+                                                            if idx >= 0:
+                                                                debug_text = text_content[max(0, idx-50):idx+200]
+                                                                print(f"요청사항 주변 텍스트: {debug_text}")
+                                                except Exception as e:
+                                                    print(f"요청사항 추출 중 오류 발생: {e}")
+                                                    traceback.print_exc()
+
                                                 # 텔레그램 메시지 준비
                                                 message = ""
                                                 if designer_name:
@@ -205,6 +296,11 @@ async def check_mail():
                                                     message += f"{' '.join(reservation_menu)} "
                                                 if reservation_status:
                                                     message += f"{reservation_status} 되었습니다."
+                                                if request_note:
+                                                    message += f"\n\n요청사항: {request_note}"
+                                                    print(f"요청사항이 메시지에 추가됨: {request_note[:30]}...")  # 디버깅
+                                                else:
+                                                    print("요청사항이 없어 메시지에 추가되지 않음")  # 디버깅
 
                                                 # 예약 상태나 디자이너 이름, 이용일시, 예약 메뉴가 있으면 텔레그램으로 전송
                                                 if message:
