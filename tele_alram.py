@@ -296,11 +296,12 @@ async def check_mail():
                                                     message += f"{' '.join(reservation_menu)} "
                                                 if reservation_status:
                                                     message += f"{reservation_status} 되었습니다."
-                                                if request_note:
+                                                # 요청사항이 공란(빈 문자열, 공백만, "-")이 아닐 때만 메시지에 추가
+                                                if request_note and request_note.strip() and request_note.strip() != "-":
                                                     message += f"\n\n요청사항: {request_note}"
                                                     print(f"요청사항이 메시지에 추가됨: {request_note[:30]}...")  # 디버깅
                                                 else:
-                                                    print("요청사항이 없어 메시지에 추가되지 않음")  # 디버깅
+                                                    print("요청사항이 없거나 공란이라 메시지에 추가되지 않음")  # 디버깅
 
                                                 # 예약 상태나 디자이너 이름, 이용일시, 예약 메뉴가 있으면 텔레그램으로 전송
                                                 if message:
