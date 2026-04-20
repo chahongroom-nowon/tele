@@ -19,7 +19,9 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# 직원 정보 로드
+# -------------------------------
+# 직원 정보
+# -------------------------------
 staffs = []
 i = 1
 while True:
@@ -33,7 +35,7 @@ while True:
 
     use_day_list = []
     if use_day and use_day != "전체":
-        use_day_list = [int(day.strip()) for day in use_day.split(",")]
+        use_day_list = [int(x.strip()) for x in use_day.split(",")]
 
     status_list = []
     if status and status != "전체":
@@ -48,7 +50,6 @@ while True:
 
     i += 1
 
-print("✅ 직원 정보 로드 완료")
 
 menu_translation = {
     "컷": "C",
@@ -57,6 +58,7 @@ menu_translation = {
     "클리닉": "TM",
     "이미지 헤어 컨설팅": "컨설팅"
 }
+
 
 def get_filtered_dates():
     today = datetime.today()
@@ -70,8 +72,9 @@ def get_filtered_dates():
         6: (today + timedelta(days=6)).strftime("%m.%d"),
     }
 
+
 # -------------------------------
-# Gmail 연결 (1회)
+# Gmail 연결
 # -------------------------------
 def connect_mail():
     mail = imaplib.IMAP4_SSL("imap.gmail.com")
@@ -80,139 +83,131 @@ def connect_mail():
     print("✅ Gmail 연결 완료")
     return mail
 
+
 # -------------------------------
-# 메일 처리 (기존 로직 유지)
+# 메일 처리
 # -------------------------------
-async def process_new_mail(mail):
-    status, messages = mail.search(None, '(UNSEEN FROM "naverbooking_noreply@navercorp.com")')
+async def check_mail(mail):
+    try:
+        status, messages = mail.search(
+            None,
+            '(UNSEEN FROM "naverbooking_noreply@navercorp.com")'
+        )
 
-    if status != "OK":
-        return
+        if status != "OK":
+            return
 
-    for num in messages[0].split():
-        mail.store(num, '+FLAGS', '\\Seen')
+        for num in messages[0].split():
+            mail.store(num, '+FLAGS', '\\Seen')
 
-        status, msg_data = mail.fetch(num, "(RFC822)")
+            status, msg_data = mail.fetch(num, "(RFC822)")
 
-        for response_part in msg_data:
-            if isinstance(response_part, tuple):
-                msg = email.message_from_bytes(response_part[1])
+            for response_part in msg_data:
+                if isinstance(response_part, tuple):
+                    msg = email.message_from_bytes(response_part[1])
 
-                subject, encoding = decode_header(msg["Subject"] or "")[0]
-                if isinstance(subject, bytes):
-                    subject = subject.decode(encoding or "utf-8", errors="replace")
+                    subject, encoding = decode_header(msg["Subject"] or "")[0]
+                    if isinstance(subject, bytes):
+                        subject = subject.decode(encoding or "utf-8", errors="replace")
 
-                if "[네이버 예약]" not in subject:
-                    continue
+                    if "[네이버 예약]" not in subject:
+                        continue
 
-                if msg.is_multipart():
-                    for part in msg.walk():
-                        content_type = part.get_content_type()
+                    body = None
 
-                        if content_type in ["text/plain", "text/html"]:
-                            body = part.get_payload(decode=True)
-                            if not body:
+                    if msg.is_multipart():
+                        for part in msg.walk():
+                            if part.get_content_type() in ["text/plain", "text/html"]:
+                                body = part.get_payload(decode=True)
+                                if body:
+                                    body = body.decode(errors="replace")
+                                    break
+
+                    if not body:
+                        continue
+
+                    tree = html.fromstring(body)
+                    text_content = tree.text_content()
+
+                    # 상태
+                    reservation_status = None
+                    if "예약을 취소" in text_content:
+                        reservation_status = "취소"
+                    elif "새로운 예약이 확정" in text_content:
+                        reservation_status = "추가"
+                    elif "입금대기" in text_content:
+                        reservation_status = "입금대기"
+
+                    # 디자이너
+                    designer_name = None
+                    m = re.search(r"(\S+)\s*(실장|디자이너)", text_content)
+                    if m:
+                        designer_name = m.group(1)
+
+                    # 날짜
+                    usage_time = None
+                    m = re.search(r"\d{4}\.\d{2}\.\d{2}\.\(.*?\)\s*(오전|오후)\s*\d{1,2}:\d{2}", text_content)
+                    if m:
+                        usage_time = '.'.join(m.group(0).split('.')[1:])
+
+                    # 메뉴
+                    reservation_menu = re.findall(r"(\S+)\s*예약금", text_content)
+                    reservation_menu = [menu_translation.get(m, m) for m in reservation_menu]
+
+                    message = ""
+                    if designer_name:
+                        message += f"{designer_name} / "
+                    if usage_time:
+                        message += f"{usage_time} "
+                    if reservation_menu:
+                        message += f"{' '.join(reservation_menu)} "
+                    if reservation_status:
+                        message += f"{reservation_status} 되었습니다."
+
+                    if not message:
+                        continue
+
+                    filtered_dates = get_filtered_dates()
+
+                    for staff in staffs:
+                        if staff["team"] != "전체" and staff["team"] != designer_name:
+                            continue
+
+                        if staff["use_day"] != "전체" and usage_time:
+                            date_part = usage_time.split()[0]
+                            if not any(filtered_dates[d] in date_part for d in staff["use_day"]):
                                 continue
 
-                            body = body.decode(errors="replace")
-                            tree = html.fromstring(body)
-                            text_content = tree.text_content()
+                        if staff["status"] != "전체" and reservation_status not in staff["status"]:
+                            continue
 
-                            # 상태
-                            reservation_status = None
-                            if "예약을 취소" in text_content:
-                                reservation_status = "취소"
-                            elif "새로운 예약이 확정" in text_content:
-                                reservation_status = "추가"
-                            elif "입금대기" in text_content:
-                                reservation_status = "입금대기"
+                        await bot.send_message(chat_id=staff["chat_id"], text=message)
+                        print("📨 전송:", message)
 
-                            # 디자이너
-                            designer_name = None
-                            match = re.search(r"(\S+)\s*(실장|디자이너)", text_content)
-                            if match:
-                                designer_name = match.group(1)
+    except Exception as e:
+        print("❌ 메일 처리 오류:", e)
 
-                            # 날짜
-                            usage_time = None
-                            match = re.search(r"\d{4}\.\d{2}\.\d{2}\.\(.*?\)\s*(오전|오후)\s*\d{1,2}:\d{2}", text_content)
-                            if match:
-                                usage_time = '.'.join(match.group(0).split('.')[1:])
-
-                            # 메뉴
-                            reservation_menu = re.findall(r"(\S+)\s*예약금", text_content)
-                            reservation_menu = [menu_translation.get(m, m) for m in reservation_menu]
-
-                            # 메시지 구성
-                            message = ""
-                            if designer_name:
-                                message += f"{designer_name} / "
-                            if usage_time:
-                                message += f"{usage_time} "
-                            if reservation_menu:
-                                message += f"{' '.join(reservation_menu)} "
-                            if reservation_status:
-                                message += f"{reservation_status} 되었습니다."
-
-                            if not message:
-                                continue
-
-                            # 필터링
-                            filtered_dates = get_filtered_dates()
-
-                            for staff in staffs:
-                                if staff["team"] != "전체" and staff["team"] != designer_name:
-                                    continue
-
-                                if staff["use_day"] != "전체" and usage_time:
-                                    date_part = usage_time.split()[0]
-                                    if not any(filtered_dates[d] in date_part for d in staff["use_day"]):
-                                        continue
-
-                                if staff["status"] != "전체" and reservation_status not in staff["status"]:
-                                    continue
-
-                                await bot.send_message(chat_id=staff["chat_id"], text=message)
-                                print(f"📨 전송: {message}")
 
 # -------------------------------
-# IDLE 루프
+# 메인 루프 (핵심)
 # -------------------------------
-async def idle_loop():
+async def main():
     mail = connect_mail()
 
     while True:
         try:
-            print("📡 IDLE 대기 중...")
-            mail.send(b'IDLE\r\n')
-            mail.readline()
-
-            start = time.time()
-
-            while True:
-                if time.time() - start > 540:  # 9분
-                    mail.send(b'DONE\r\n')
-                    break
-
-                resp = mail.readline()
-
-                if resp and b'EXISTS' in resp:
-                    print("📬 새 메일 감지!")
-                    await process_new_mail(mail)
+            await check_mail(mail)
 
         except Exception as e:
-            print("❌ 오류:", e)
-
+            print("❌ 루프 오류:", e)
             try:
                 mail.logout()
             except:
                 pass
-
-            time.sleep(10)
             mail = connect_mail()
 
-# -------------------------------
-# 실행
-# -------------------------------
+        await asyncio.sleep(30)  # 🔥 안정성 핵심 (30초 polling)
+
+
 if __name__ == "__main__":
-    asyncio.run(idle_loop())
+    asyncio.run(main())
